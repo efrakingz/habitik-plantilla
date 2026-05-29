@@ -14,11 +14,11 @@ import '../providers/notification_provider.dart';
 import '../models/notification_model.dart';
 import '../providers/family_provider.dart';
 
-import 'games/ducha_challenge.dart';
-import 'games/trivia_challenge.dart';
-import 'games/puzzle_challenge.dart';
-import 'games/evidence_challenge.dart';
-import 'games/wordle_challenge.dart';
+import 'challenges/games/ducha_challenge.dart';
+import 'challenges/games/trivia_challenge.dart';
+import 'challenges/games/puzzle_challenge.dart';
+import 'challenges/games/evidence_challenge.dart';
+import 'challenges/games/wordle_challenge.dart';
 class ChallengesScreen extends StatefulWidget {
   final String active;
   final VoidCallback onBack;

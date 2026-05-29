@@ -2,185 +2,37 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
-import 'package:permission_handler/permission_handler.dart';
 import 'dart:convert';
-import '../config/theme.dart';
-import '../providers/auth_provider.dart';
-import '../services/auth_service.dart';
-import 'dashboard_screen.dart';
+import '../../config/theme.dart';
+import '../../providers/auth_provider.dart';
+import '../dashboard/dashboard_screen.dart';
+import 'onboarding_controller.dart';
 
-import 'dart:async';
-import '../providers/notification_provider.dart';
-import '../models/notification_model.dart';
-
-class OnboardingScreen extends StatefulWidget {
+class OnboardingScreen extends StatelessWidget {
   const OnboardingScreen({super.key});
 
   @override
-  State<OnboardingScreen> createState() => _OnboardingScreenState();
+  Widget build(BuildContext context) {
+    return ChangeNotifierProvider(
+      create: (_) {
+        final controller = OnboardingController();
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          context.read<AuthProvider>().setOnboardingActive(true);
+        });
+        return controller;
+      },
+      child: const _OnboardingScreenContent(),
+    );
+  }
 }
 
-class _OnboardingScreenState extends State<OnboardingScreen> {
-  final FamilyService _familyService = FamilyService();
-  int _step = 0;
-  String? _rol;
-  int? _personas;
-  String? _qrToken;
-  bool _creatingFamily = false;
-  bool _scanning = false;
-  final Map<String, String> _encuesta = {};
-  final TextEditingController _codeCtrl = TextEditingController(text: 'HAB-');
-  Timer? _qrTimer;
-  int _qrTimeLeft = 600;
-
-  @override
-  void initState() {
-    super.initState();
-    // Lock navigation so refreshProfile() mid-flow doesn't kick us to Dashboard
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      context.read<AuthProvider>().setOnboardingActive(true);
-    });
-    // Prevent the user from deleting the 'HAB-' prefix in the code field and force uppercase
-    _codeCtrl.addListener(() {
-      final currentText = _codeCtrl.text;
-      if (!currentText.toUpperCase().startsWith('HAB-')) {
-        _codeCtrl.value = _codeCtrl.value.copyWith(
-          text: 'HAB-',
-          selection: const TextSelection.collapsed(offset: 4),
-        );
-      } else {
-        final upperText = currentText.toUpperCase();
-        if (currentText != upperText) {
-          final selectionIndex = _codeCtrl.selection.baseOffset;
-          _codeCtrl.value = _codeCtrl.value.copyWith(
-            text: upperText,
-            selection: TextSelection.collapsed(offset: selectionIndex),
-          );
-        }
-      }
-    });
-  }
-
-  @override
-  void dispose() {
-    _codeCtrl.dispose();
-    _qrTimer?.cancel();
-    super.dispose();
-  }
-
-  String get _fmtQrTime {
-    final m = (_qrTimeLeft ~/ 60).toString().padLeft(2, '0');
-    final s = (_qrTimeLeft % 60).toString().padLeft(2, '0');
-    return '$m:$s';
-  }
-
-  String? _familyCode; // hub-XXXXXXXX for visible display
-
-  Future<void> _nextStep() async {
-    // Step 1 jefe: create family then immediately generate QR token
-    if (_step == 1 && _rol == 'jefe') {
-      setState(() => _creatingFamily = true);
-      try {
-        final profile = context.read<AuthProvider>().profile;
-        if (profile != null) {
-          await _familyService.createFamily(profile.id, _personas ?? 1);
-          if (!mounted) return;
-          await context.read<AuthProvider>().refreshProfile();
-          if (!mounted) return;
-          // Generate QR right away so it's ready when we show step 2
-          final updatedProfile = context.read<AuthProvider>().profile;
-          if (updatedProfile?.familyId != null) {
-            final qrData = await _familyService.getOrGenerateActiveQRToken(updatedProfile!.familyId!);
-            _qrToken = qrData['token'] as String?;
-            _qrTimeLeft = qrData['timeLeft'] as int? ?? 600;
-            _familyCode = _qrToken;
-
-            _qrTimer?.cancel();
-            _qrTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
-              if (_qrTimeLeft > 0) {
-                if (mounted) {
-                  setState(() => _qrTimeLeft--);
-                }
-              } else {
-                timer.cancel();
-                if (mounted) {
-                  setState(() {
-                    _qrToken = null;
-                  });
-                }
-              }
-            });
-          }
-        }
-      } catch (_) {}
-      if (!mounted) return;
-      setState(() => _creatingFamily = false);
-    }
-
-    setState(() => _step++);
-  }
-
-  void _onQRScan(String data) async {
-    setState(() => _scanning = false);
-    try {
-      // First try to parse as JSON if it's the old format, otherwise treat as direct token
-      String tokenToValidate = data;
-      try {
-        final json = jsonDecode(data);
-        if (json.containsKey('token')) {
-          tokenToValidate = json['token'];
-        }
-      } catch (_) {}
-
-      final familyId = await _familyService.validateFamilyCode(tokenToValidate);
-      if (familyId != null) {
-        if (!mounted) return;
-        final profile = context.read<AuthProvider>().profile;
-        if (profile != null) {
-          await _familyService.linkMember(profile.id, familyId);
-          if (!mounted) return;
-          await context.read<AuthProvider>().refreshProfile();
-          
-          // Notify the Jefes
-          try {
-            final jefes = await _familyService.getFamilyMembers(familyId);
-            for (var jefe in jefes.where((m) => m.rol.toLowerCase().contains('jefe'))) {
-              NotificationProvider.writeNotificationForUser(
-                jefe.id,
-                NotificationItem(
-                  id: '${DateTime.now().millisecondsSinceEpoch}_join',
-                  title: '¡Nuevo miembro!',
-                  desc: '${profile.nombre.split(' ')[0]} se ha unido al hogar.',
-                  time: DateTime.now().toIso8601String(),
-                  iconCode: 'person_add',
-                  colorHex: '#4CAF50',
-                ),
-              );
-            }
-          } catch (e) {
-            debugPrint('Failed to notify jefes: $e');
-          }
-
-          if (mounted) setState(() => _step = 2);
-        }
-      } else {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('QR invalido o expirado'), backgroundColor: Colors.red),
-          );
-        }
-      }
-    } catch (_) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Error al leer QR'), backgroundColor: Colors.red),
-        );
-      }
-    }
-  }
+class _OnboardingScreenContent extends StatelessWidget {
+  const _OnboardingScreenContent();
 
   @override
   Widget build(BuildContext context) {
+    final controller = context.watch<OnboardingController>();
+
     return Scaffold(
       body: Container(
         color: AppTheme.green700,
@@ -212,8 +64,8 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                       children: [
                         const Text('Progreso del registro', style: TextStyle(color: AppTheme.green200, fontSize: 12)),
                         Builder(builder: (ctx) {
-                          final total = _rol == 'jefe' ? 6 : 5;
-                          final pct = ((_step.clamp(0, total - 1) + 1) / total * 100).round();
+                          final total = controller.rol == 'jefe' ? 6 : 5;
+                          final pct = ((controller.step.clamp(0, total - 1) + 1) / total * 100).round();
                           return Text('$pct%', style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w700));
                         }),
                       ],
@@ -228,12 +80,12 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                         ),
                         LayoutBuilder(
                           builder: (context, constraints) {
-                            final total = _rol == 'jefe' ? 6 : 5;
+                            final total = controller.rol == 'jefe' ? 6 : 5;
                             return AnimatedContainer(
                               duration: const Duration(milliseconds: 500),
                               curve: Curves.easeOut,
                               height: 8,
-                              width: constraints.maxWidth * ((_step.clamp(0, total - 1) + 1) / total),
+                              width: constraints.maxWidth * ((controller.step.clamp(0, total - 1) + 1) / total),
                               decoration: BoxDecoration(
                                 borderRadius: BorderRadius.circular(4),
                                 gradient: const LinearGradient(
@@ -247,12 +99,12 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                     ),
                     const SizedBox(height: 6),
                     Builder(builder: (ctx) {
-                      final total = _rol == 'jefe' ? 6 : 5;
-                      final rem = total - (_step.clamp(0, total - 1) + 1);
+                      final total = controller.rol == 'jefe' ? 6 : 5;
+                      final rem = total - (controller.step.clamp(0, total - 1) + 1);
                       return Row(
                         mainAxisAlignment: MainAxisAlignment.spaceBetween,
                         children: [
-                          Text('Paso ${_step.clamp(0, total - 1) + 1} de $total', style: const TextStyle(color: AppTheme.green200, fontSize: 11)),
+                          Text('Paso ${controller.step.clamp(0, total - 1) + 1} de $total', style: const TextStyle(color: AppTheme.green200, fontSize: 11)),
                           Text('$rem paso${rem != 1 ? 's' : ''} restante${rem != 1 ? 's' : ''}', style: const TextStyle(color: AppTheme.green200, fontSize: 11)),
                         ],
                       );
@@ -269,7 +121,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                   ),
                   child: SingleChildScrollView(
                     padding: const EdgeInsets.all(20),
-                    child: _buildStepContent(),
+                    child: _buildStepContent(context, controller),
                   ),
                 ),
               ),
@@ -280,24 +132,19 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     );
   }
 
-  Widget _buildStepContent() {
-    switch (_step) {
-      case 0: return _buildRoleStep();
-      // Step 1: jefe=personas / miembro=scan QR
-      case 1: return _rol == 'jefe' ? _buildPersonasStep() : _buildQRScanStep();
-      // Step 2: both = habit survey
-      case 2: return _buildHabitosEncuestaStep();
-      // Step 3: jefe=infraestructura / miembro=retos recomendados
-      case 3: return _rol == 'jefe' ? _buildInfraestructuraStep() : _buildRetosRecomendadosStep();
-      // Step 4: jefe=retos recomendados / miembro=finish
-      case 4: return _rol == 'jefe' ? _buildRetosRecomendadosStep() : _buildFinishStep();
-      // Step 5: jefe=finish
-      case 5: return _buildFinishStep();
+  Widget _buildStepContent(BuildContext context, OnboardingController controller) {
+    switch (controller.step) {
+      case 0: return _buildRoleStep(context, controller);
+      case 1: return controller.rol == 'jefe' ? _buildPersonasStep(context, controller) : _buildQRScanStep(context, controller);
+      case 2: return _buildHabitosEncuestaStep(context, controller);
+      case 3: return controller.rol == 'jefe' ? _buildInfraestructuraStep(context, controller) : _buildRetosRecomendadosStep(context, controller);
+      case 4: return controller.rol == 'jefe' ? _buildRetosRecomendadosStep(context, controller) : _buildFinishStep(context, controller);
+      case 5: return _buildFinishStep(context, controller);
       default: return const SizedBox.shrink();
     }
   }
 
-  Widget _buildRoleStep() {
+  Widget _buildRoleStep(BuildContext context, OnboardingController controller) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -305,19 +152,19 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
         const SizedBox(height: 4),
         const Text('Cual es tu rol en la familia?', style: TextStyle(color: AppTheme.green500, fontSize: 14)),
         const SizedBox(height: 24),
-        _roleCard('jefe', Icons.shield_outlined, 'Jefe de Familia', 'Acceso completo: metas, presupuesto, tareas y auditoria de boletas.'),
+        _roleCard(controller, 'jefe', Icons.shield_outlined, 'Jefe de Familia', 'Acceso completo: metas, presupuesto, tareas y auditoria de boletas.'),
         const SizedBox(height: 12),
-        _roleCard('miembro', Icons.people_outline, 'Miembro', 'Retos, gamificacion y seguimiento personal de habitos.'),
+        _roleCard(controller, 'miembro', Icons.people_outline, 'Miembro', 'Retos, gamificacion y seguimiento personal de habitos.'),
         const SizedBox(height: 32),
-        _continueButton(_rol != null),
+        _continueButton(context, controller, enabled: controller.rol != null),
       ],
     );
   }
 
-  Widget _roleCard(String role, IconData icon, String title, String desc) {
-    final selected = _rol == role;
+  Widget _roleCard(OnboardingController controller, String role, IconData icon, String title, String desc) {
+    final selected = controller.rol == role;
     return GestureDetector(
-      onTap: () => setState(() => _rol = role),
+      onTap: () => controller.setRol(role),
       child: Container(
         padding: const EdgeInsets.all(14),
         decoration: BoxDecoration(
@@ -351,7 +198,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     );
   }
 
-  Widget _buildPersonasStep() {
+  Widget _buildPersonasStep(BuildContext context, OnboardingController controller) {
     final emojis = ['🧍', '👫', '👨‍👩‍👦', '👨‍👩‍👧‍👦', '🏠'];
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -363,9 +210,9 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
         Wrap(
           spacing: 10, runSpacing: 10,
           children: [1, 2, 3, 4, 5].map((n) {
-            final selected = _personas == n;
+            final selected = controller.personas == n;
             return GestureDetector(
-              onTap: () => setState(() => _personas = n),
+              onTap: () => controller.setPersonas(n),
               child: Container(
                 width: (MediaQuery.of(context).size.width - 70) / 3,
                 padding: const EdgeInsets.symmetric(vertical: 16),
@@ -387,25 +234,12 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
           }).toList(),
         ),
         const SizedBox(height: 32),
-        _continueButton(_personas != null, loading: _creatingFamily, text: _creatingFamily ? 'Creando hogar...' : 'Continuar'),
+        _continueButton(context, controller, enabled: controller.personas != null, loading: controller.creatingFamily, text: controller.creatingFamily ? 'Creando hogar...' : 'Continuar'),
       ],
     );
   }
 
-  Future<void> _iniciarScan() async {
-    final status = await Permission.camera.request();
-    if (status.isGranted) {
-      if (!mounted) return;
-      setState(() => _scanning = true);
-    } else {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Se requiere permiso de cámara para escanear'), backgroundColor: Colors.orange),
-      );
-    }
-  }
-
-  Widget _buildQRScanStep() {
+  Widget _buildQRScanStep(BuildContext context, OnboardingController controller) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -413,20 +247,20 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
         const SizedBox(height: 4),
         const Text('Escanea el QR o ingresa el código del jefe de familia', style: TextStyle(color: AppTheme.green500, fontSize: 14)),
         const SizedBox(height: 20),
-        if (_scanning)
+        if (controller.scanning)
           SizedBox(
             height: 280,
             child: ClipRRect(
               borderRadius: BorderRadius.circular(16),
               child: MobileScanner(onDetect: (capture) {
                 final barcode = capture.barcodes.first;
-                if (barcode.rawValue != null) _onQRScan(barcode.rawValue!);
+                if (barcode.rawValue != null) controller.onQRScan(context, barcode.rawValue!);
               }),
             ),
           )
         else
           GestureDetector(
-            onTap: _iniciarScan,
+            onTap: () => controller.iniciarScan(context),
             child: Container(
               width: double.infinity, height: 180,
               decoration: BoxDecoration(
@@ -460,16 +294,16 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
             ],
           ),
         ),
-        if (!_scanning) ...[
+        if (!controller.scanning) ...[
           const SizedBox(height: 20),
-          Row(
+          const Row(
             children: [
-              const Expanded(child: Divider(color: AppTheme.green200)),
+              Expanded(child: Divider(color: AppTheme.green200)),
               Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 10),
+                padding: EdgeInsets.symmetric(horizontal: 10),
                 child: Text('o ingresa manualmente', style: TextStyle(color: AppTheme.textLight, fontSize: 11, fontWeight: FontWeight.w600)),
               ),
-              const Expanded(child: Divider(color: AppTheme.green200)),
+              Expanded(child: Divider(color: AppTheme.green200)),
             ],
           ),
           const SizedBox(height: 20),
@@ -477,10 +311,10 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
             children: [
               Expanded(
                 child: TextField(
-                  controller: _codeCtrl,
+                  controller: controller.codeCtrl,
                   onSubmitted: (val) {
                     if (val.length >= 8) {
-                      _onQRScan(val);
+                      controller.onQRScan(context, val);
                     }
                   },
                   decoration: InputDecoration(
@@ -513,8 +347,8 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                 ),
                 child: IconButton(
                   onPressed: () {
-                    if (_codeCtrl.text.length >= 8) {
-                      _onQRScan(_codeCtrl.text);
+                    if (controller.codeCtrl.text.length >= 8) {
+                      controller.onQRScan(context, controller.codeCtrl.text);
                     }
                   },
                   icon: const Icon(Icons.arrow_forward, color: Colors.white),
@@ -528,7 +362,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     );
   }
 
-  Widget _buildHabitosEncuestaStep() {
+  Widget _buildHabitosEncuestaStep(BuildContext context, OnboardingController controller) {
     final preguntas = <Map<String, Object>>[
       {
         'key': 'ducha',
@@ -537,38 +371,26 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
         'ops': <String>['Menos de 5 min', '5 a 10 min', '10 a 15 min', 'Más de 15 min']
       },
       {
-        'key': 'hervidor',
-        'cat': '⚡ Energía',
-        'label': '¿Cuántas veces al día usas el hervidor eléctrico?',
-        'ops': <String>['No lo utilizo', '1 a 2 veces al día', '3 a 5 veces al día', 'Más de 5 veces al día']
+        'key': 'reciclaje',
+        'cat': '♻️ Reciclaje',
+        'label': '¿Separan residuos para reciclar en tu hogar?',
+        'ops': <String>['No reciclamos', 'Separamos lo básico', 'Separamos todo']
       },
       {
-        'key': 'luces',
-        'cat': '⚡ Energía',
-        'label': '¿Cuántas horas al día dejas luces encendidas en habitaciones vacías?',
-        'ops': <String>['Menos de 1 hora', '1 a 3 horas', '3 a 6 horas', 'Más de 6 horas']
+        'key': 'urgencia',
+        'cat': '🚨 Urgencia',
+        'label': '¿Cuál consideras que es la problemática más urgente a resolver?',
+        'ops': <String>['Gasto de Luz', 'Gasto de Agua', 'Falta de Reciclaje']
       },
       {
-        'key': 'vampiros',
-        'cat': '⚡ Energía',
-        'label': '¿Dejas cargadores y electrodomésticos enchufados sin usarlos?',
-        'ops': <String>['Nunca', 'A veces', 'Siempre']
-      },
-      {
-        'key': 'lavadora',
-        'cat': '💧 Agua',
-        'label': '¿Con qué frecuencia utilizas la lavadora a la semana?',
-        'ops': <String>['1 vez o menos', '2 a 3 veces', '4 veces o más', 'No la utilizo']
-      },
-      {
-        'key': 'llave_cepillo',
-        'cat': '💧 Agua',
-        'label': '¿Cierras la llave del agua mientras te cepillas los dientes o te afeitas?',
-        'ops': <String>['Siempre', 'A veces', 'Nunca']
+        'key': 'horario',
+        'cat': '⏰ Notificaciones',
+        'label': '¿En qué horario está la casa llena para recibir alertas?',
+        'ops': <String>['Mañana: 07:00 - 12:00', 'Tarde: 12:00 - 18:00', 'Noche: 18:00 - 23:00']
       },
     ];
 
-    final allAnswered = preguntas.every((q) => _encuesta.containsKey(q['key'] as String));
+    final allAnswered = preguntas.every((q) => controller.encuesta.containsKey(q['key'] as String));
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -604,9 +426,9 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                 Wrap(
                   spacing: 8, runSpacing: 8,
                   children: ops.map((op) {
-                    final selected = _encuesta[key] == op;
+                    final selected = controller.encuesta[key] == op;
                     return GestureDetector(
-                      onTap: () => setState(() => _encuesta[key] = op),
+                      onTap: () => controller.setEncuesta(key, op),
                       child: Container(
                         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
                         decoration: BoxDecoration(
@@ -627,63 +449,33 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
           );
         }),
         const SizedBox(height: 12),
-        _continueButton(allAnswered),
+        _continueButton(context, controller, enabled: allAnswered),
       ],
     );
   }
 
-  Widget _buildInfraestructuraStep() {
+  Widget _buildInfraestructuraStep(BuildContext context, OnboardingController controller) {
     final preguntas = <Map<String, Object>>[
       {
-        'key': 'tipoVivienda',
-        'cat': '🏠 Vivienda',
-        'label': '¿Qué tipo de vivienda tiene tu familia?',
-        'ops': <String>['Departamento', 'Casa de 1 piso', 'Casa de 2 o más pisos', 'Otro']
-      },
-      {
-        'key': 'climatizacion',
-        'cat': '🌡️ Calefacción',
-        'label': '¿Qué sistema de calefacción principal utilizan en invierno?',
-        'ops': <String>['Calefacción eléctrica', 'Estufa a gas licuado (balón)', 'Estufa a parafina (kerosene)', 'No climatizamos (Solo abrigo y ventilación)']
-      },
-      {
-        'key': 'electrodomesticos',
-        'cat': '⚡ Consumos',
-        'label': '¿Cuáles de estos electrodomésticos de alto consumo se usan frecuentemente en casa?',
-        'ops': <String>['Secadora de ropa', 'Aire acondicionado', 'Lavavajillas', 'Solo lo básico']
-      },
-      {
-        'key': 'gastoLuz',
-        'cat': '💰 Electricidad',
-        'label': '¿Cuánto pagan aproximadamente en tu boleta mensual de luz?',
-        'ops': <String>['Menos de \$35.000 CLP', 'Entre \$35.000 y \$75.000 CLP', 'Entre \$75.000 y \$120.000 CLP', 'Más de \$120.000 CLP']
-      },
-      {
-        'key': 'gastoAgua',
-        'cat': '💰 Agua',
-        'label': '¿Cuánto pagan aproximadamente en tu boleta mensual de agua?',
-        'ops': <String>['Menos de \$20.000 CLP', 'Entre \$20.000 y \$35.000 CLP', 'Entre \$35.000 y \$60.000 CLP', 'Más de \$60.000 CLP']
-      },
-      {
-        'key': 'frecuenciaBoleta',
-        'cat': '📊 Gestión',
-        'label': '¿Con qué frecuencia revisan o pagan estas boletas?',
-        'ops': <String>['Mensual', 'Bimestral', 'Cuando se vence / Al acordarse']
+        'key': 'ahorro',
+        'cat': '💰 Ahorro',
+        'label': '¿Cuánto dinero quieren ahorrar este mes?',
+        'ops': <String>['Un 5% (Meta conservadora)', 'Un 10% (Meta recomendada)', 'Un 20% (Eco-Expertos)']
       },
     ];
 
-    final allAnswered = preguntas.every((q) => _encuesta.containsKey(q['key'] as String));
+    final allAnswered = preguntas.every((q) => controller.encuesta.containsKey(q['key'] as String));
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         const Text(
-          'Infraestructura y Gastos del Hogar',
+          'Meta de Ahorro Familiar',
           style: TextStyle(color: AppTheme.textDark, fontSize: 20, fontWeight: FontWeight.w800),
         ),
         const SizedBox(height: 4),
         const Text(
-          'Información exclusiva del Jefe de Familia para configurar metas de consumo.',
+          'Información exclusiva del Jefe de Familia para configurar las metas y límites de gasto del mes.',
           style: TextStyle(color: AppTheme.green500, fontSize: 14),
         ),
         const SizedBox(height: 20),
@@ -708,9 +500,9 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                 Wrap(
                   spacing: 8, runSpacing: 8,
                   children: ops.map((op) {
-                    final selected = _encuesta[key] == op;
+                    final selected = controller.encuesta[key] == op;
                     return GestureDetector(
-                      onTap: () => setState(() => _encuesta[key] = op),
+                      onTap: () => controller.setEncuesta(key, op),
                       child: Container(
                         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
                         decoration: BoxDecoration(
@@ -731,170 +523,13 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
           );
         }),
         const SizedBox(height: 12),
-        _continueButton(allAnswered),
+        _continueButton(context, controller, enabled: allAnswered),
       ],
     );
   }
 
-  Widget _buildFinishStep() {
-    final profile = context.read<AuthProvider>().profile;
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
-          _rol == 'jefe' ? '¡Hogar listo!' : '¡Ya estás dentro!',
-          style: const TextStyle(color: AppTheme.textDark, fontSize: 20, fontWeight: FontWeight.w800),
-        ),
-        const SizedBox(height: 4),
-        Text(
-          _rol == 'jefe' ? 'Comparte el QR con tu familia para que se unan.' : 'Ya formas parte del hogar. ¡A ganar XP!',
-          style: const TextStyle(color: AppTheme.green500, fontSize: 14),
-        ),
-        const SizedBox(height: 20),
-        // ✅ Check icon
-        Center(
-          child: Column(
-            children: [
-              Container(
-                width: 72, height: 72,
-                decoration: const BoxDecoration(color: AppTheme.green100, shape: BoxShape.circle),
-                child: const Icon(Icons.check_circle, color: AppTheme.green600, size: 40),
-              ),
-              const SizedBox(height: 8),
-              Text(
-                _rol == 'jefe' ? 'Hogar creado exitosamente' : 'Hogar vinculado',
-                style: const TextStyle(color: AppTheme.textDark, fontWeight: FontWeight.w700),
-              ),
-            ],
-          ),
-        ),
-        // QR only for jefe
-        if (_rol == 'jefe') ...[
-          const SizedBox(height: 20),
-          if (_qrToken != null)
-            Center(
-              child: Container(
-                padding: const EdgeInsets.all(16),
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  border: Border.all(color: AppTheme.green600, width: 2),
-                  borderRadius: BorderRadius.circular(20),
-                  boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.06), blurRadius: 12)],
-                ),
-                child: Column(
-                  children: [
-                    QrImageView(
-                      data: jsonEncode({'token': _qrToken, 'family_id': profile?.familyId ?? ''}),
-                      version: QrVersions.auto,
-                      size: 180,
-                      backgroundColor: Colors.white,
-                      eyeStyle: const QrEyeStyle(eyeShape: QrEyeShape.square, color: AppTheme.green700),
-                      dataModuleStyle: const QrDataModuleStyle(dataModuleShape: QrDataModuleShape.square, color: AppTheme.green700),
-                    ),
-                    const SizedBox(height: 8),
-                    if (_familyCode != null)
-                      Text(_familyCode!, style: const TextStyle(color: AppTheme.textDark, fontSize: 18, fontWeight: FontWeight.w900, letterSpacing: 2)),
-                    const SizedBox(height: 2),
-                    const Text('Muestra este QR o comparte el código', style: TextStyle(color: AppTheme.textLight, fontSize: 11)),
-                  ],
-                ),
-              ),
-            )
-          else
-            const Center(child: Padding(padding: EdgeInsets.all(16), child: CircularProgressIndicator(color: AppTheme.green500))),
-          const SizedBox(height: 12),
-          Container(
-            padding: const EdgeInsets.all(10),
-            decoration: BoxDecoration(
-              color: AppTheme.amber400.withValues(alpha: 0.1),
-              borderRadius: BorderRadius.circular(10),
-              border: Border.all(color: AppTheme.amber400.withValues(alpha: 0.3)),
-            ),
-            child: Row(
-              children: [
-                const Icon(Icons.timer_outlined, color: AppTheme.amber400, size: 16),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    _qrToken != null
-                        ? 'Este QR expira en $_fmtQrTime. Puedes generar uno nuevo desde tu perfil.'
-                        : 'El código ha expirado. Puedes generar uno nuevo desde tu perfil.',
-                    style: const TextStyle(color: AppTheme.amber400, fontSize: 11, fontWeight: FontWeight.w600),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ],
-        const SizedBox(height: 20),
-        SizedBox(
-          width: double.infinity, height: 50,
-          child: ElevatedButton(
-            onPressed: () {
-              context.read<AuthProvider>().setOnboardingActive(false);
-              Navigator.of(context).pushAndRemoveUntil(
-                MaterialPageRoute(builder: (_) => const DashboardScreen()),
-                (route) => false,
-              );
-            },
-            style: ElevatedButton.styleFrom(
-              backgroundColor: AppTheme.green700,
-              foregroundColor: Colors.white,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-            ),
-            child: const Text('Ir al Dashboard', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w800)),
-          ),
-        ),
-      ],
-    );
-  }
-
-  /// Analyses _encuesta and returns 3 recommended reto IDs with their metadata.
-  List<Map<String, String>> _getRetosRecomendados() {
-    final recomendados = <Map<String, String>>[];
-
-    // Ducha larga → Speedrun de la Ducha
-    final ducha = _encuesta['ducha'] ?? '';
-    if (ducha == '10 a 15 min' || ducha == 'Más de 15 min') {
-      recomendados.add({'emoji': '🚿', 'titulo': 'Speedrun de la Ducha', 'desc': 'Ducharte en menos de 10 min', 'xp': '50', 'id': 'ducha'});
-    }
-
-    // Luces innecesarias o llave abierta → Inspección del Día
-    final luces = _encuesta['luces'] ?? '';
-    final llave = _encuesta['llave_cepillo'] ?? '';
-    if (luces == '3 a 6 horas' || luces == 'Más de 6 horas' || llave == 'A veces' || llave == 'Nunca') {
-      recomendados.add({'emoji': '🔍', 'titulo': 'Inspección del Día', 'desc': 'Sube una foto de la misión de hoy', 'xp': '100', 'id': 'inspeccion'});
-    }
-
-    // Hervidor constante → Trivia Infinita
-    final hervidor = _encuesta['hervidor'] ?? '';
-    if (hervidor == '3 a 5 veces al día' || hervidor == 'Más de 5 veces al día') {
-      recomendados.add({'emoji': '🧠', 'titulo': 'Trivia Infinita', 'desc': '3 vidas · preguntas de ecología', 'xp': '150', 'id': 'trivia'});
-    }
-
-    // Vampiros de energía → Eco-Puzzle Temático
-    final vampiros = _encuesta['vampiros'] ?? '';
-    if (vampiros == 'Siempre' || vampiros == 'A veces') {
-      recomendados.add({'emoji': '🎯', 'titulo': 'Eco-Puzzle', 'desc': 'Clasifica residuos en 60 segundos', 'xp': '120', 'id': 'puzzle'});
-    }
-
-    // Defaults in case we need to pad
-    final defaults = [
-      {'emoji': '🚿', 'titulo': 'Speedrun de la Ducha', 'desc': 'Ducharte en menos de 10 min', 'xp': '50', 'id': 'ducha'},
-      {'emoji': '🧠', 'titulo': 'Trivia Infinita', 'desc': '3 vidas · preguntas de ecología', 'xp': '150', 'id': 'trivia'},
-      {'emoji': '🎯', 'titulo': 'Eco-Puzzle', 'desc': 'Clasifica residuos en 60 segundos', 'xp': '120', 'id': 'puzzle'},
-      {'emoji': '🔍', 'titulo': 'Inspección del Día', 'desc': 'Sube una foto de la misión de hoy', 'xp': '100', 'id': 'inspeccion'},
-    ];
-    for (final d in defaults) {
-      if (recomendados.length >= 3) break;
-      if (!recomendados.any((r) => r['titulo'] == d['titulo'])) recomendados.add(d);
-    }
-
-    return recomendados.take(3).toList();
-  }
-
-  Widget _buildRetosRecomendadosStep() {
-    final retos = _getRetosRecomendados();
+  Widget _buildRetosRecomendadosStep(BuildContext context, OnboardingController controller) {
+    final retos = controller.getRetosRecomendados();
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -971,16 +606,127 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
           ),
         ),
         const SizedBox(height: 20),
-        _continueButton(true, text: '¡Empieza ya! →'),
+        _continueButton(context, controller, enabled: true, text: '¡Empieza ya! →'),
       ],
     );
   }
 
-  Widget _continueButton(bool enabled, {bool loading = false, String text = 'Continuar'}) {
+  Widget _buildFinishStep(BuildContext context, OnboardingController controller) {
+    final profile = context.read<AuthProvider>().profile;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          controller.rol == 'jefe' ? '¡Hogar listo!' : '¡Ya estás dentro!',
+          style: const TextStyle(color: AppTheme.textDark, fontSize: 20, fontWeight: FontWeight.w800),
+        ),
+        const SizedBox(height: 4),
+        Text(
+          controller.rol == 'jefe' ? 'Comparte el QR con tu familia para que se unan.' : 'Ya formas parte del hogar. ¡A ganar XP!',
+          style: const TextStyle(color: AppTheme.green500, fontSize: 14),
+        ),
+        const SizedBox(height: 20),
+        Center(
+          child: Column(
+            children: [
+              Container(
+                width: 72, height: 72,
+                decoration: const BoxDecoration(color: AppTheme.green100, shape: BoxShape.circle),
+                child: const Icon(Icons.check_circle, color: AppTheme.green600, size: 40),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                controller.rol == 'jefe' ? 'Hogar creado exitosamente' : 'Hogar vinculado',
+                style: const TextStyle(color: AppTheme.textDark, fontWeight: FontWeight.w700),
+              ),
+            ],
+          ),
+        ),
+        if (controller.rol == 'jefe') ...[
+          const SizedBox(height: 20),
+          if (controller.qrToken != null)
+            Center(
+              child: Container(
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  border: Border.all(color: AppTheme.green600, width: 2),
+                  borderRadius: BorderRadius.circular(20),
+                  boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.06), blurRadius: 12)],
+                ),
+                child: Column(
+                  children: [
+                    QrImageView(
+                      data: jsonEncode({'token': controller.qrToken, 'family_id': profile?.familyId ?? ''}),
+                      version: QrVersions.auto,
+                      size: 180,
+                      backgroundColor: Colors.white,
+                      eyeStyle: const QrEyeStyle(eyeShape: QrEyeShape.square, color: AppTheme.green700),
+                      dataModuleStyle: const QrDataModuleStyle(dataModuleShape: QrDataModuleShape.square, color: AppTheme.green700),
+                    ),
+                    const SizedBox(height: 8),
+                    if (controller.familyCode != null)
+                      Text(controller.familyCode!, style: const TextStyle(color: AppTheme.textDark, fontSize: 18, fontWeight: FontWeight.w900, letterSpacing: 2)),
+                    const SizedBox(height: 2),
+                    const Text('Muestra este QR o comparte el código', style: TextStyle(color: AppTheme.textLight, fontSize: 11)),
+                  ],
+                ),
+              ),
+            )
+          else
+            const Center(child: Padding(padding: EdgeInsets.all(16), child: CircularProgressIndicator(color: AppTheme.green500))),
+          const SizedBox(height: 12),
+          Container(
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              color: AppTheme.amber400.withValues(alpha: 0.1),
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: AppTheme.amber400.withValues(alpha: 0.3)),
+            ),
+            child: Row(
+              children: [
+                const Icon(Icons.timer_outlined, color: AppTheme.amber400, size: 16),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    controller.qrToken != null
+                        ? 'Este QR expira en ${controller.fmtQrTime}. Puedes generar uno nuevo desde tu perfil.'
+                        : 'El código ha expirado. Puedes generar uno nuevo desde tu perfil.',
+                    style: const TextStyle(color: AppTheme.amber400, fontSize: 11, fontWeight: FontWeight.w600),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+        const SizedBox(height: 20),
+        SizedBox(
+          width: double.infinity, height: 50,
+          child: ElevatedButton(
+            onPressed: () {
+              context.read<AuthProvider>().setOnboardingActive(false);
+              Navigator.of(context).pushAndRemoveUntil(
+                MaterialPageRoute(builder: (_) => const DashboardScreen()),
+                (route) => false,
+              );
+            },
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppTheme.green700,
+              foregroundColor: Colors.white,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+            ),
+            child: const Text('Ir al Dashboard', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w800)),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _continueButton(BuildContext context, OnboardingController controller, {required bool enabled, bool loading = false, String text = 'Continuar'}) {
     return SizedBox(
       width: double.infinity, height: 50,
       child: ElevatedButton(
-        onPressed: enabled && !loading ? _nextStep : null,
+        onPressed: enabled && !loading ? () => controller.nextStep(context) : null,
         style: ElevatedButton.styleFrom(
           backgroundColor: enabled && !loading ? AppTheme.green700 : AppTheme.green100,
           foregroundColor: enabled && !loading ? Colors.white : AppTheme.green300,
@@ -992,5 +738,4 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
       ),
     );
   }
-
 }

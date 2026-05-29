@@ -1,38 +1,28 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import '../config/theme.dart';
-import '../providers/notification_provider.dart';
+import '../../config/theme.dart';
+import '../../providers/notification_provider.dart';
+import 'notifications_controller.dart';
 
 class NotificationsScreen extends StatelessWidget {
   const NotificationsScreen({super.key});
 
-  Color _parseColor(String hex) {
-    try {
-      if (hex.isEmpty) return AppTheme.green600;
-      return Color(int.parse(hex.replaceAll('#', '0xFF')));
-    } catch (_) {
-      return AppTheme.green600;
-    }
+  @override
+  Widget build(BuildContext context) {
+    return ChangeNotifierProvider(
+      create: (_) => NotificationsController(),
+      child: const _NotificationsScreenContent(),
+    );
   }
+}
 
-  IconData _getIcon(String code) {
-    switch (code) {
-      case 'emoji_events': return Icons.emoji_events;
-      case 'close': return Icons.close;
-      case 'card_giftcard': return Icons.card_giftcard;
-      case 'favorite': return Icons.favorite;
-      case 'check_circle': return Icons.check_circle;
-      case 'local_fire_department': return Icons.local_fire_department;
-      case 'lightbulb': return Icons.lightbulb;
-      case 'shopping_cart': return Icons.shopping_cart;
-      case 'home': return Icons.home;
-      default: return Icons.notifications;
-    }
-  }
+class _NotificationsScreenContent extends StatelessWidget {
+  const _NotificationsScreenContent();
 
   @override
   Widget build(BuildContext context) {
     final notificationProvider = context.watch<NotificationProvider>();
+    final controller = context.watch<NotificationsController>();
     final notifs = notificationProvider.notifications;
 
     return Scaffold(
@@ -67,7 +57,7 @@ class NotificationsScreen extends StatelessWidget {
                       return GestureDetector(
                         onTap: () {
                           if (!n.read) {
-                            context.read<NotificationProvider>().markAsRead(n.id);
+                            controller.markAsRead(context, n.id);
                           }
                         },
                         child: AnimatedContainer(
@@ -83,8 +73,8 @@ class NotificationsScreen extends StatelessWidget {
                             children: [
                               CircleAvatar(
                                 radius: 18,
-                                backgroundColor: _parseColor(n.colorHex).withValues(alpha: 0.2),
-                                child: Icon(_getIcon(n.iconCode), color: _parseColor(n.colorHex), size: 18),
+                                backgroundColor: controller.parseColor(n.colorHex).withValues(alpha: 0.2),
+                                child: Icon(controller.getIcon(n.iconCode), color: controller.parseColor(n.colorHex), size: 18),
                               ),
                               const SizedBox(width: 10),
                               Expanded(

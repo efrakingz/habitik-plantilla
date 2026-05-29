@@ -1,123 +1,46 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import '../config/theme.dart';
-import '../models/models.dart';
-import '../providers/auth_provider.dart';
-import '../providers/family_provider.dart';
-import '../providers/evidence_provider.dart';
-import '../providers/task_provider.dart';
-import '../providers/bill_provider.dart';
-import '../providers/notification_provider.dart';
-import '../providers/achievement_provider.dart';
-import '../screens/challenges_screen.dart';
-import '../screens/scan_screen.dart';
-import '../screens/control_screen.dart';
-import '../screens/profile_screen.dart';
-import '../screens/notifications_screen.dart';
-import '../screens/rewards_screen.dart';
-import '../widgets/bottom_nav.dart';
+import '../../config/theme.dart';
+import '../../models/models.dart';
+import '../../providers/auth_provider.dart';
+import '../../providers/family_provider.dart';
+import '../../providers/evidence_provider.dart';
+import '../../providers/bill_provider.dart';
+import '../../providers/notification_provider.dart';
+import '../../components/bottom_nav.dart';
+import '../../components/avatar_badge.dart';
+import '../../components/role_badge.dart';
+import '../challenges/challenges_screen.dart';
+import '../scan_screen.dart';
+import '../control/control_screen.dart';
+import '../profile_screen.dart';
+import '../notifications_screen.dart';
+import '../rewards_screen.dart';
+import 'dashboard_controller.dart';
 
-class DashboardScreen extends StatefulWidget {
+class DashboardScreen extends StatelessWidget {
   const DashboardScreen({super.key});
 
   @override
-  State<DashboardScreen> createState() => _DashboardScreenState();
-}
-
-class _DashboardScreenState extends State<DashboardScreen> {
-  int _currentIndex = 0;
-  String _activeChallenge = '';
-  int _scanTab = 0;
-  int _scanState = 0;
-  int _metaLuz = 15;
-  int _metaAgua = 15;
-
-  @override
-  void initState() {
-    super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) async {
-      debugPrint('DashboardScreen: INIT STATE STARTED');
-      final auth = context.read<AuthProvider>();
-      final familyId = auth.profile?.familyId;
-      final userId = auth.user?.id;
-      
-      debugPrint('DashboardScreen: user=$userId family=$familyId');
-      final familyProv = context.read<FamilyProvider>();
-      final evidenceProv = context.read<EvidenceProvider>();
-      final taskProv = context.read<TaskProvider>();
-      final billProv = context.read<BillProvider>();
-      final notifProv = context.read<NotificationProvider>();
-      final achievementProv = context.read<AchievementProvider>();
-
-      if (familyId != null) {
-        debugPrint('DashboardScreen: calling loadFamilyMembers...');
-        await familyProv.loadFamilyMembers(familyId);
-        
-        debugPrint('DashboardScreen: calling loadEvidences...');
-        await evidenceProv.loadEvidences(familyId);
-        if (userId != null) {
-          await evidenceProv.loadLikedEvidences(userId);
-        }
-        
-        debugPrint('DashboardScreen: calling loadBills...');
-        await billProv.loadBills(familyId);
-      }
-      
-      if (userId != null) {
-        debugPrint('DashboardScreen: calling loadForUser(TaskProvider)...');
-        await taskProv.loadForUser(userId, familyId: familyId);
-        
-        debugPrint('DashboardScreen: calling loadForUser(NotificationProvider)...');
-        await notifProv.loadForUser(userId);
-
-        debugPrint('DashboardScreen: calling loadForUser(AchievementProvider)...');
-        await achievementProv.loadForUser(userId);
-        
-        if (auth.profile != null) {
-          achievementProv.checkProfileAchievements(auth.profile!, auth);
-        }
-
-        debugPrint('DashboardScreen: ALL LOADS COMPLETE');
-      }
-    });
-  }
-
-  Color _parseColor(String hex) {
-    try {
-      if (hex.isEmpty) return AppTheme.green600;
-      return Color(int.parse(hex.replaceAll('#', '0xFF')));
-    } catch (_) {
-      return AppTheme.green600;
-    }
-  }
-
-  /// Shows the real profile photo if available, falls back to letter avatar
-  Widget _buildAvatar({
-    required String letter,
-    required String colorHex,
-    String? avatarUrl,
-    double radius = 16,
-  }) {
-    final bg = _parseColor(colorHex);
-    if (avatarUrl != null && avatarUrl.trim().isNotEmpty) {
-      return CircleAvatar(
-        radius: radius,
-        backgroundImage: NetworkImage(avatarUrl),
-        backgroundColor: bg,
-        onBackgroundImageError: (e, s) => debugPrint('Error loading avatar'),
-      );
-    }
-    return CircleAvatar(
-      radius: radius,
-      backgroundColor: bg,
-      child: Text(letter, style: TextStyle(color: Colors.white, fontSize: radius * 0.75, fontWeight: FontWeight.w900)),
+  Widget build(BuildContext context) {
+    return ChangeNotifierProvider(
+      create: (_) => DashboardController()..initData(context),
+      child: const _DashboardScreenContent(),
     );
   }
+}
+
+class _DashboardScreenContent extends StatelessWidget {
+  const _DashboardScreenContent();
 
   @override
   Widget build(BuildContext context) {
     final auth = context.watch<AuthProvider>();
-    final isJefe = auth.profile?.rol.toLowerCase() == 'jefe' || auth.profile?.rol.toLowerCase() == 'jefa' || auth.profile?.rol.toLowerCase() == 'co-admin' || auth.profile?.rol.toLowerCase() == 'coadmin';
+    final isJefe = auth.profile?.rol.toLowerCase() == 'jefe' || 
+                   auth.profile?.rol.toLowerCase() == 'jefa' || 
+                   auth.profile?.rol.toLowerCase() == 'co-admin' || 
+                   auth.profile?.rol.toLowerCase() == 'coadmin';
+    final controller = context.watch<DashboardController>();
 
     return Scaffold(
       body: Container(
@@ -125,10 +48,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
         child: SafeArea(
           child: Column(
             children: [
-              Expanded(child: _buildBody(isJefe)),
+              Expanded(child: _buildBody(context, controller, isJefe)),
               BottomNav(
-                currentIndex: _currentIndex,
-                onTap: (i) => setState(() => _currentIndex = i),
+                currentIndex: controller.currentIndex,
+                onTap: controller.setTabIndex,
                 isJefe: isJefe,
               ),
             ],
@@ -138,18 +61,32 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
-  Widget _buildBody(bool isJefe) {
-    switch (_currentIndex) {
-      case 0: return _buildDashboard();
-      case 1: return ChallengesScreen(active: _activeChallenge, onBack: () => setState(() => _activeChallenge = ''), onSelect: (id) => setState(() => _activeChallenge = id));
-      case 2: return isJefe ? ScanScreen(tab: _scanTab, state: _scanState, onTabChange: (t) => setState(() => _scanTab = t), onStateChange: (s) => setState(() => _scanState = s)) : _buildDashboard();
+  Widget _buildBody(BuildContext context, DashboardController controller, bool isJefe) {
+    switch (controller.currentIndex) {
+      case 0: return _buildDashboard(context, controller);
+      case 1: return ChallengesScreen(
+        active: controller.activeChallenge, 
+        onBack: () => controller.setActiveChallenge(''), 
+        onSelect: controller.setActiveChallenge
+      );
+      case 2: return isJefe ? ScanScreen(
+        tab: controller.scanTab, 
+        state: controller.scanState, 
+        onTabChange: controller.setScanTab, 
+        onStateChange: controller.setScanState
+      ) : _buildDashboard(context, controller);
       case 3: return const RewardsScreen();
-      case 4: return isJefe ? ControlScreen(metaLuz: _metaLuz, metaAgua: _metaAgua, onMetaLuzChanged: (v) => setState(() => _metaLuz = v), onMetaAguaChanged: (v) => setState(() => _metaAgua = v)) : _buildDashboard();
-      default: return _buildDashboard();
+      case 4: return isJefe ? ControlScreen(
+        metaLuz: controller.metaLuz, 
+        metaAgua: controller.metaAgua, 
+        onMetaLuzChanged: controller.setMetaLuz, 
+        onMetaAguaChanged: controller.setMetaAgua
+      ) : _buildDashboard(context, controller);
+      default: return _buildDashboard(context, controller);
     }
   }
 
-  Widget _buildDashboard() {
+  Widget _buildDashboard(BuildContext context, DashboardController controller) {
     final auth = context.watch<AuthProvider>();
     final familyProvider = context.watch<FamilyProvider>();
     final profile = auth.profile;
@@ -166,7 +103,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 children: [
                   Row(
                     children: [
-                      // Family photo — enlarged to radius 20
                       familyProvider.familyAvatar != null && familyProvider.familyAvatar!.trim().isNotEmpty
                         ? CircleAvatar(
                             radius: 20,
@@ -187,7 +123,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                             children: [
                               Text('Hola, ${familyProvider.familyName}!', style: const TextStyle(color: AppTheme.green200, fontSize: 12)),
                               const SizedBox(width: 6),
-                              if (profile != null) _rolBadge(profile.rol),
+                              if (profile != null) RoleBadge(rol: profile.rol),
                             ],
                           ),
                           const Text('Muro Familiar', style: TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.w800)),
@@ -219,7 +155,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     behavior: HitTestBehavior.opaque,
                     child: Padding(
                       padding: const EdgeInsets.only(left: 8, top: 4, bottom: 4),
-                      child: _buildAvatar(
+                      child: AvatarBadge(
                         letter: profile?.avatarLetra ?? 'U',
                         colorHex: profile?.avatarColor ?? '#2e7d32',
                         avatarUrl: profile?.avatarUrl,
@@ -236,16 +172,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
           child: RefreshIndicator(
             color: AppTheme.green600,
             backgroundColor: Colors.white,
-            onRefresh: () async {
-              final a = context.read<AuthProvider>();
-              if (a.profile?.familyId != null) {
-                await a.refreshProfile();
-                if (!mounted) return;
-                await context.read<FamilyProvider>().loadFamilyMembers(a.profile!.familyId!);
-                if (!mounted) return;
-                await context.read<EvidenceProvider>().loadEvidences(a.profile!.familyId!);
-              }
-            },
+            onRefresh: () => controller.refresh(context),
             child: Container(
               decoration: const BoxDecoration(
                 color: Colors.white,
@@ -255,33 +182,33 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 physics: const AlwaysScrollableScrollPhysics(parent: BouncingScrollPhysics()),
                 padding: const EdgeInsets.all(20),
                 child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  _buildEnergyBar(),
-                  const SizedBox(height: 16),
-                  _buildRanking(),
-                  const SizedBox(height: 16),
-                  const Text('Feed de Evidencias', style: TextStyle(color: AppTheme.textDark, fontSize: 15, fontWeight: FontWeight.w800)),
-                  const SizedBox(height: 8),
-                  Consumer<EvidenceProvider>(
-                    builder: (context, evidenceProvider, _) {
-                      if (evidenceProvider.isLoading) {
-                        return const Center(child: Padding(padding: EdgeInsets.all(20), child: CircularProgressIndicator(color: AppTheme.green500)));
-                      }
-                      if (evidenceProvider.evidences.isEmpty) {
-                        return const Padding(
-                          padding: EdgeInsets.all(20),
-                          child: Center(child: Text('Aún no hay evidencias en la familia', style: TextStyle(color: AppTheme.textLight))),
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    _buildEnergyBar(context, controller),
+                    const SizedBox(height: 16),
+                    _buildRanking(context),
+                    const SizedBox(height: 16),
+                    const Text('Feed de Evidencias', style: TextStyle(color: AppTheme.textDark, fontSize: 15, fontWeight: FontWeight.w800)),
+                    const SizedBox(height: 8),
+                    Consumer<EvidenceProvider>(
+                      builder: (context, evidenceProvider, _) {
+                        if (evidenceProvider.isLoading) {
+                          return const Center(child: Padding(padding: EdgeInsets.all(20), child: CircularProgressIndicator(color: AppTheme.green500)));
+                        }
+                        if (evidenceProvider.evidences.isEmpty) {
+                          return const Padding(
+                            padding: EdgeInsets.all(20),
+                            child: Center(child: Text('Aún no hay evidencias en la familia', style: TextStyle(color: AppTheme.textLight))),
+                          );
+                        }
+                        return Column(
+                          children: evidenceProvider.evidences.asMap().entries.map((e) => _buildEvidenceCard(context, e.key, e.value)).toList(),
                         );
-                      }
-                      return Column(
-                        children: evidenceProvider.evidences.asMap().entries.map((e) => _buildEvidenceCard(e.key, e.value)).toList(),
-                      );
-                    },
-                  ),
-                ],
+                      },
+                    ),
+                  ],
+                ),
               ),
-            ),
             ),
           ),
         ),
@@ -289,9 +216,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
-  Widget _buildEnergyBar() {
+  Widget _buildEnergyBar(BuildContext context, DashboardController controller) {
     final billProvider = context.watch<BillProvider>();
-    final energyPct = billProvider.familyEnergyPercent(_metaLuz, _metaAgua);
+    final energyPct = billProvider.familyEnergyPercent(controller.metaLuz, controller.metaAgua);
     final pctDisplay = (energyPct * 100).round();
 
     final luzChange = billProvider.consumoChangePercent('luz');
@@ -388,7 +315,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
-  Widget _buildRanking() {
+  Widget _buildRanking(BuildContext context) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -419,7 +346,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   child: Row(
                     children: [
                       SizedBox(width: 24, child: Text('${i + 1}', style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w900, color: AppTheme.amber400))),
-                      _buildAvatar(letter: m.avatar, colorHex: m.color, avatarUrl: m.avatarUrl, radius: 16),
+                      AvatarBadge(letter: m.avatar, colorHex: m.color, avatarUrl: m.avatarUrl, radius: 16),
                       const SizedBox(width: 8),
                       Expanded(
                         child: Column(
@@ -429,7 +356,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                               children: [
                                 Text(m.nombre, style: const TextStyle(color: AppTheme.textDark, fontSize: 13, fontWeight: FontWeight.w700)),
                                 const SizedBox(width: 4),
-                                _rolBadge(m.rol),
+                                RoleBadge(rol: m.rol),
                               ],
                             ),
                             Text('Nivel ${m.nivel}', style: const TextStyle(color: AppTheme.textLight, fontSize: 11)),
@@ -460,31 +387,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
-  Widget _rolBadge(String rol) {
-    Color bg; Color fg; String text;
-    final r = rol.toLowerCase();
-    if (r == 'jefe' || r == 'jefa' || r == 'jefa de familia') {
-      bg = const Color(0xFFFFECB3); fg = const Color(0xFFF57C00); text = '👑 Jefe';
-    } else if (r == 'papa' || r == 'papá') {
-      bg = const Color(0xFFBBDEFB); fg = const Color(0xFF1976D2); text = '👨 Papá';
-    } else if (r == 'hija') {
-      bg = const Color(0xFFF8BBD0); fg = const Color(0xFFC2185B); text = '👧 Hija';
-    } else if (r == 'hijo') {
-      bg = const Color(0xFFE1BEE7); fg = const Color(0xFF7B1FA2); text = '👦 Hijo';
-    } else if (r == 'co-admin' || r == 'coadmin') {
-      bg = const Color(0xFFBBDEFB); fg = const Color(0xFF1976D2); text = '⭐ Co-Admin';
-    } else {
-      // Default to Miembro
-      bg = const Color(0xFFE1BEE7); fg = const Color(0xFF7B1FA2); text = '👦 Miembro';
-    }
-    
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
-      decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(6)),
-      child: Text(text, style: TextStyle(color: fg, fontSize: 10, fontWeight: FontWeight.w700)),
-    );
-  }
-
   String _formatTime(String timeStr) {
     try {
       final date = DateTime.parse(timeStr).toLocal();
@@ -496,11 +398,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
       if (diff.inDays < 7) return 'Hace ${diff.inDays}d';
       return '${date.day}/${date.month}';
     } catch (_) {
-      return timeStr; // Fallback to raw string if not ISO format (e.g. 'Recién')
+      return timeStr;
     }
   }
 
-  Widget _buildEvidenceCard(int index, Evidence e) {
+  Widget _buildEvidenceCard(BuildContext context, int index, Evidence e) {
     return Container(
       margin: const EdgeInsets.only(bottom: 10),
       padding: const EdgeInsets.all(12),
@@ -510,7 +412,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
         children: [
           Row(
             children: [
-              _buildAvatar(letter: e.avatar, colorHex: e.color, avatarUrl: e.avatarUrl, radius: 14),
+              AvatarBadge(letter: e.avatar, colorHex: e.color, avatarUrl: e.avatarUrl, radius: 14),
               const SizedBox(width: 8),
               Expanded(
                 child: Column(

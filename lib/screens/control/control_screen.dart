@@ -1,17 +1,12 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import '../config/theme.dart';
-import '../models/models.dart';
-import '../models/notification_model.dart';
-import '../providers/task_provider.dart';
-import '../providers/notification_provider.dart';
-import '../providers/auth_provider.dart';
-import '../providers/family_provider.dart';
-import '../providers/evidence_provider.dart';
-import '../providers/achievement_provider.dart';
+import '../../config/theme.dart';
+import '../../models/models.dart';
+import '../../providers/task_provider.dart';
+import 'control_controller.dart';
 
-class ControlScreen extends StatefulWidget {
+class ControlScreen extends StatelessWidget {
   final int metaLuz;
   final int metaAgua;
   final void Function(int) onMetaLuzChanged;
@@ -26,194 +21,39 @@ class ControlScreen extends StatefulWidget {
   });
 
   @override
-  State<ControlScreen> createState() => _ControlScreenState();
-}
-
-class _ControlScreenState extends State<ControlScreen> {
-
-  String? _rechazoMotivo;
-  int? _rechazandoId;
-  String? _rechazandoUserId;
-  String? _rechazandoReto;
-
-  @override
-  void initState() {
-    super.initState();
-    // Reload validations from Supabase every time jefe opens this screen
-    WidgetsBinding.instance.addPostFrameCallback((_) async {
-      await context.read<TaskProvider>().refreshValidations();
-    });
-  }
-
-  Color _parseColor(String hex) => Color(int.parse(hex.replaceAll('#', '0xFF')));
-
-
-  void _aprobar(int id) async {
-    final taskProvider = context.read<TaskProvider>();
-    final authProvider = context.read<AuthProvider>();
-    final familyProvider = context.read<FamilyProvider>();
-    final evidenceProvider = context.read<EvidenceProvider>();
-    final achievementProvider = context.read<AchievementProvider>();
-
-    final index = taskProvider.pendingValidations.indexWhere((v) => v.id == id);
-    if (index == -1) return;
-    
-    final validation = taskProvider.pendingValidations[index];
-    final leveledUp = await taskProvider.approveValidation(id);
-    
-    if (!mounted) return;
-    
-    final authProfile = authProvider.profile;
-    if (authProfile?.familyId != null) {
-      familyProvider.loadFamilyMembers(authProfile!.familyId!);
-    }
-
-    // Always create a feed entry — for retos show the image, for canjes show a gift card
-    final isCanje = validation.evidencias.length == 1 && validation.evidencias.first == 'Canje';
-    String? error;
-    if (isCanje) {
-      // Canje approved → feed entry without image
-      error = await evidenceProvider.addEvidence(
-        Evidence(
-          id: DateTime.now().millisecondsSinceEpoch.toString(),
-          familyId: authProfile?.familyId,
-          userId: validation.userId,
-          autor: validation.usuario,
-          avatar: validation.avatar,
-          color: '#F57C00',
-          accion: validation.reto,
-          desc: '¡Canje aprobado por el Jefe de Hogar! 🎉',
-          xp: 0,
-          tiempo: 'Recién',
-          emoji: '🎁',
-          imagen: null,
-          likes: 0,
-        ),
-        achievementProvider: achievementProvider,
-        authProvider: authProvider,
-      );
-    } else {
-      // Reto con evidencia → feed entry with optional image
-      final firstImage = validation.evidencias.firstWhere(
-        (e) => e.contains('/') || e.contains('\\'),
-        orElse: () => '',
-      );
-      error = await evidenceProvider.addEvidence(
-        Evidence(
-          id: DateTime.now().millisecondsSinceEpoch.toString(),
-          familyId: authProfile?.familyId,
-          userId: validation.userId,
-          autor: validation.usuario,
-          avatar: validation.avatar,
-          color: validation.color,
-          accion: validation.reto,
-          desc: 'Reto aprobado exitosamente',
-          xp: validation.xp,
-          tiempo: 'Recién',
-          emoji: '🎯',
-          imagen: firstImage.isNotEmpty ? firstImage : null,
-          likes: 0,
-        ),
-        achievementProvider: achievementProvider,
-        authProvider: authProvider,
-      );
-    }
-
-    if (error == null && authProfile != null) {
-      achievementProvider.checkAndUnlock(
-        authProfile.id,
-        'jefe_aprobador',
-        authProvider: authProvider,
-      ).ignore();
-    }
-    
-    if (!mounted) return;
-    
-    final now = DateTime.now().toIso8601String();
-    
-    // 1. Notification for approval (Canje or Reto)
-    if (isCanje) {
-      NotificationProvider.writeNotificationForUser(
-        validation.userId,
-        NotificationItem(
-          id: '${DateTime.now().millisecondsSinceEpoch}_canje',
-          title: '✅ Canje aprobado',
-          desc: 'Tu canje de "${validation.reto}" ha sido aprobado.',
-          time: now,
-          iconCode: 'card_giftcard',
-          colorHex: '#4CAF50',
-        ),
-      );
-    } else {
-      NotificationProvider.writeNotificationForUser(
-        validation.userId,
-        NotificationItem(
-          id: '${DateTime.now().millisecondsSinceEpoch}_reto',
-          title: '✅ Reto aprobado',
-          desc: 'Tu evidencia para "${validation.reto}" fue aprobada. +${validation.xp} XP',
-          time: now,
-          iconCode: 'check_circle',
-          colorHex: '#4CAF50',
-        ),
-      );
-    }
-
-    // 2. Notification for Level Up
-    if (leveledUp) {
-      NotificationProvider.writeNotificationForUser(
-        validation.userId,
-        NotificationItem(
-          id: '${DateTime.now().millisecondsSinceEpoch}_nivel',
-          title: '¡Subiste de nivel!',
-          desc: '¡Felicidades! Has alcanzado un nuevo nivel.',
-          time: now,
-          iconCode: 'emoji_events',
-          colorHex: '#F9A825',
-        ),
-      );
-    }
-
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(error != null ? 'Error DB: $error' : (isCanje ? 'Canje aprobado.' : (leveledUp ? 'Evidencia aprobada. ¡El usuario subió de nivel!' : 'Evidencia aprobada.'))),
-        backgroundColor: error != null ? Colors.red : AppTheme.green600,
-        duration: const Duration(seconds: 6),
-      )
+  Widget build(BuildContext context) {
+    return ChangeNotifierProvider(
+      create: (_) {
+        final controller = ControlController();
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          controller.refreshValidations(context);
+        });
+        return controller;
+      },
+      child: _ControlScreenContent(
+        metaLuz: metaLuz,
+        metaAgua: metaAgua,
+        onMetaLuzChanged: onMetaLuzChanged,
+        onMetaAguaChanged: onMetaAguaChanged,
+      ),
     );
   }
+}
 
-  void _confirmarRechazo() {
-    if (_rechazandoId != null && _rechazoMotivo != null && _rechazoMotivo!.trim().isNotEmpty) {
-      context.read<TaskProvider>().rejectValidation(_rechazandoId!, _rechazoMotivo!);
+class _ControlScreenContent extends StatelessWidget {
+  final int metaLuz;
+  final int metaAgua;
+  final void Function(int) onMetaLuzChanged;
+  final void Function(int) onMetaAguaChanged;
 
-      // Write rejection notification directly to the member's SharedPreferences slot
-      // so they see it in their bitácora when they next open the app
-      if (_rechazandoUserId != null) {
-        final jefeName = context.read<AuthProvider>().profile?.nombre ?? 'El Jefe';
-        final reto = _rechazandoReto ?? 'tu solicitud';
-        NotificationProvider.writeNotificationForUser(
-          _rechazandoUserId!,
-          NotificationItem(
-            id: DateTime.now().millisecondsSinceEpoch.toString(),
-            title: '❌ Solicitud rechazada',
-            desc: '"$reto" fue rechazada por $jefeName. Motivo: ${_rechazoMotivo!.trim()}',
-            time: DateTime.now().toIso8601String(),
-            iconCode: 'cancel',
-            colorHex: '#E53935',
-            read: false,
-          ),
-        );
-      }
+  const _ControlScreenContent({
+    required this.metaLuz,
+    required this.metaAgua,
+    required this.onMetaLuzChanged,
+    required this.onMetaAguaChanged,
+  });
 
-      setState(() {
-        _rechazandoId = null;
-        _rechazandoUserId = null;
-        _rechazandoReto = null;
-        _rechazoMotivo = null;
-      });
-      Navigator.pop(context);
-    }
-  }
+  Color _parseColor(String hex) => Color(int.parse(hex.replaceAll('#', '0xFF')));
 
   @override
   Widget build(BuildContext context) {
@@ -249,9 +89,9 @@ class _ControlScreenState extends State<ControlScreen> {
                 children: [
                   _sectionTitle(Icons.gps_fixed, 'Seteo de Metas de Ahorro'),
                   const SizedBox(height: 10),
-                  _metaSlider('Reducir Luz', widget.metaLuz, AppTheme.amber400, widget.onMetaLuzChanged),
+                  _metaSlider('Reducir Luz', metaLuz, AppTheme.amber400, onMetaLuzChanged),
                   const SizedBox(height: 10),
-                  _metaSlider('Reducir Agua', widget.metaAgua, AppTheme.blue700, widget.onMetaAguaChanged),
+                  _metaSlider('Reducir Agua', metaAgua, AppTheme.blue700, onMetaAguaChanged),
                   const SizedBox(height: 20),
                   _sectionTitle(Icons.check_circle, 'Validación de Retos'),
                   const SizedBox(height: 10),
@@ -268,7 +108,7 @@ class _ControlScreenState extends State<ControlScreen> {
                         );
                       }
                       return Column(
-                        children: taskProvider.pendingValidations.map(_buildRetoCard).toList(),
+                        children: taskProvider.pendingValidations.map((v) => _buildRetoCard(context, v)).toList(),
                       );
                     },
                   ),
@@ -314,13 +154,11 @@ class _ControlScreenState extends State<ControlScreen> {
     );
   }
 
-  Widget _buildRetoCard(PendingValidation t) {
-    // A canje is ONLY identified by the literal 'Canje' marker in evidencias
+  Widget _buildRetoCard(BuildContext context, PendingValidation t) {
+    final controller = context.read<ControlController>();
     final isCanje = t.evidencias.length == 1 && t.evidencias.first == 'Canje';
     final imageList = t.evidencias.where((e) => e.contains('/') || e.contains('\\')).toList();
     final textEvidence = t.evidencias.where((e) => !e.contains('/') && !e.contains('\\')).where((e) => e != 'Canje').join(', ');
-    
-    debugPrint('ControlScreen card: "${t.reto}" | requiereEvidencia=${t.requiereEvidencia} | isCanje=$isCanje | evidencias=${t.evidencias} | images=${imageList.length}');
     
     return Container(
       margin: const EdgeInsets.only(bottom: 12),
@@ -452,7 +290,6 @@ class _ControlScreenState extends State<ControlScreen> {
               ),
             ),
           ],
-          // Show text evidence (timer, score, etc.)
           if (t.requiereEvidencia && textEvidence.isNotEmpty) ...[
             const SizedBox(height: 10),
             Container(
@@ -483,7 +320,7 @@ class _ControlScreenState extends State<ControlScreen> {
             children: [
               Expanded(
                 child: ElevatedButton.icon(
-                  onPressed: () => _aprobar(t.id),
+                  onPressed: () => controller.aprobar(context, t.id),
                   icon: const Icon(Icons.check, size: 16, color: Colors.white),
                   label: const Text('Aprobar', style: TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w700)),
                   style: ElevatedButton.styleFrom(backgroundColor: AppTheme.green600, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)), padding: const EdgeInsets.symmetric(vertical: 10)),
@@ -492,7 +329,7 @@ class _ControlScreenState extends State<ControlScreen> {
               const SizedBox(width: 8),
               Expanded(
                 child: ElevatedButton.icon(
-                  onPressed: () => _showRechazoModal(t.id, t.userId, t.reto),
+                  onPressed: () => _showRechazoModal(context, t.id, t.userId, t.reto),
                   icon: const Icon(Icons.close, size: 16, color: Colors.white),
                   label: const Text('Rechazar', style: TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w700)),
                   style: ElevatedButton.styleFrom(backgroundColor: Colors.redAccent, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)), padding: const EdgeInsets.symmetric(vertical: 10)),
@@ -505,19 +342,16 @@ class _ControlScreenState extends State<ControlScreen> {
     );
   }
 
-
-  void _showRechazoModal(int id, String userId, String reto) {
-    _rechazandoId = id;
-    _rechazandoUserId = userId;
-    _rechazandoReto = reto;
-    _rechazoMotivo = '';
+  void _showRechazoModal(BuildContext context, int id, String userId, String reto) {
+    final controller = context.read<ControlController>();
+    controller.iniciarRechazo(id, userId, reto);
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.white,
       shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(28))),
-      builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setModalState) => Padding(
+      builder: (ctx) => Consumer<ControlController>(
+        builder: (ctx, ctrl, _) => Padding(
           padding: const EdgeInsets.all(20).copyWith(bottom: MediaQuery.of(ctx).viewInsets.bottom + 20),
           child: Column(
             mainAxisSize: MainAxisSize.min,
@@ -534,13 +368,15 @@ class _ControlScreenState extends State<ControlScreen> {
                   hintText: 'Ej: La foto no muestra las luces apagadas...',
                   border: OutlineInputBorder(borderRadius: BorderRadius.all(Radius.circular(12))),
                 ),
-                onChanged: (v) => setModalState(() => _rechazoMotivo = v),
+                onChanged: ctrl.setRechazoMotivo,
               ),
               const SizedBox(height: 16),
               SizedBox(
                 width: double.infinity,
                 child: ElevatedButton(
-                  onPressed: (_rechazoMotivo != null && _rechazoMotivo!.trim().isNotEmpty) ? _confirmarRechazo : null,
+                  onPressed: (ctrl.rechazoMotivo != null && ctrl.rechazoMotivo!.trim().isNotEmpty) 
+                      ? () => ctrl.confirmarRechazo(context) 
+                      : null,
                   style: ElevatedButton.styleFrom(backgroundColor: Colors.redAccent, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))),
                   child: const Text('Confirmar Rechazo', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700)),
                 ),

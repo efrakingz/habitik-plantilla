@@ -1,149 +1,52 @@
-import 'dart:io';
-import 'dart:async';
 import 'dart:convert';
-import '../models/models.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:qr_flutter/qr_flutter.dart';
-import '../config/theme.dart';
-import 'package:image_picker/image_picker.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
-import '../providers/auth_provider.dart';
-import '../providers/family_provider.dart';
-import '../providers/evidence_provider.dart';
-import '../providers/task_provider.dart';
-import '../providers/bill_provider.dart';
-import '../providers/notification_provider.dart';
-import '../providers/achievement_provider.dart';
-import '../services/auth_service.dart';
+import '../../models/models.dart';
+import '../../config/theme.dart';
+import '../../providers/auth_provider.dart';
+import '../../providers/family_provider.dart';
+import '../../providers/evidence_provider.dart';
+import '../../providers/task_provider.dart';
+import '../../providers/bill_provider.dart';
+import '../../providers/notification_provider.dart';
+import '../../providers/achievement_provider.dart';
+import 'profile_controller.dart';
 
-class ProfileScreen extends StatefulWidget {
+class ProfileScreen extends StatelessWidget {
   const ProfileScreen({super.key});
 
   @override
-  State<ProfileScreen> createState() => _ProfileScreenState();
+  Widget build(BuildContext context) {
+    return ChangeNotifierProvider(
+      create: (_) {
+        final controller = ProfileController();
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          final auth = context.read<AuthProvider>();
+          final achievementProv = context.read<AchievementProvider>();
+          if (auth.profile != null) {
+            achievementProv.checkProfileAchievements(auth.profile!, auth);
+          }
+        });
+        return controller;
+      },
+      child: const _ProfileScreenContent(),
+    );
+  }
 }
 
-class _ProfileScreenState extends State<ProfileScreen> {
-  bool _showQr = false;
-  String? _qrToken;
-  Timer? _qrTimer;
-  int _qrTimeLeft = 600;
-
-  @override
-  void initState() {
-    super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      final auth = context.read<AuthProvider>();
-      final achievementProv = context.read<AchievementProvider>();
-      if (auth.profile != null) {
-        achievementProv.checkProfileAchievements(auth.profile!, auth);
-      }
-    });
-  }
-
-  @override
-  void dispose() {
-    _qrTimer?.cancel();
-    super.dispose();
-  }
-
-  void _loadActiveQrToken(String familyId, {bool forceNew = false}) async {
-    setState(() {
-      _showQr = true;
-      _qrToken = null;
-    });
-    try {
-      final qrData = await FamilyService().getOrGenerateActiveQRToken(familyId, forceNew: forceNew);
-      if (!mounted) return;
-      setState(() {
-        _qrToken = qrData['token'] as String?;
-        _qrTimeLeft = qrData['timeLeft'] as int? ?? 600;
-      });
-
-      _qrTimer?.cancel();
-      _qrTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
-        if (_qrTimeLeft > 0) {
-          if (mounted) {
-            setState(() => _qrTimeLeft--);
-          }
-        } else {
-          timer.cancel();
-          if (mounted) {
-            setState(() {
-              _showQr = false;
-              _qrToken = null;
-            });
-          }
-        }
-      });
-    } catch (_) {
-      if (mounted) {
-        setState(() {
-          _showQr = false;
-        });
-      }
-    }
-  }
-
-  void _generateQr(String familyId) {
-    _loadActiveQrToken(familyId, forceNew: false);
-  }
-
-  String get _fmtQrTime {
-    final m = (_qrTimeLeft ~/ 60).toString().padLeft(2, '0');
-    final s = (_qrTimeLeft % 60).toString().padLeft(2, '0');
-    return '$m:$s';
-  }
-  bool _uploadingAvatar = false;
+class _ProfileScreenContent extends StatelessWidget {
+  const _ProfileScreenContent();
 
   Color _parseColor(String hex) => Color(int.parse(hex.replaceAll('#', '0xFF')));
-
-  Future<void> _pickAndUploadAvatar(String userId) async {
-    final picker = ImagePicker();
-    final xFile = await picker.pickImage(source: ImageSource.gallery, maxWidth: 400);
-    if (xFile == null) return;
-    
-    setState(() => _uploadingAvatar = true);
-    try {
-      final bytes = await xFile.readAsBytes();
-      final ext = xFile.path.split('.').last;
-      final fileName = '$userId-${DateTime.now().millisecondsSinceEpoch}.$ext';
-      
-      final client = Supabase.instance.client;
-      await client.storage.from('avatars').uploadBinary(fileName, bytes);
-      final url = client.storage.from('avatars').getPublicUrl(fileName);
-
-      // Persist URL in database and locally
-      await client.from('profiles').update({
-        'avatar_url': url,
-      }).eq('id', userId);
-      
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setString('avatar_url_$userId', url);
-      
-      if (mounted) {
-        context.read<AuthProvider>().setLocalAvatarUrl(url);
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Foto de perfil actualizada')),
-        );
-      }
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error al subir: $e')));
-      }
-    }
-    if (mounted) {
-      setState(() => _uploadingAvatar = false);
-    }
-  }
 
   @override
   Widget build(BuildContext context) {
     final auth = context.watch<AuthProvider>();
     final family = context.watch<FamilyProvider>();
     final achievementProv = context.watch<AchievementProvider>();
+    final controller = context.watch<ProfileController>();
     final profile = auth.profile;
 
     if (profile == null) {
@@ -205,11 +108,11 @@ class _ProfileScreenState extends State<ProfileScreen> {
                                       Positioned(
                                         bottom: 0, right: 0, 
                                         child: GestureDetector(
-                                          onTap: _uploadingAvatar ? null : () => _pickAndUploadAvatar(profile.id),
+                                          onTap: controller.uploadingAvatar ? null : () => controller.pickAndUploadAvatar(context, profile.id),
                                           child: Container(
                                             width: 24, height: 24, 
                                             decoration: BoxDecoration(color: AppTheme.green600, shape: BoxShape.circle, border: Border.all(color: Colors.white, width: 2)), 
-                                            child: _uploadingAvatar 
+                                            child: controller.uploadingAvatar 
                                               ? const Padding(padding: EdgeInsets.all(4.0), child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
                                               : const Icon(Icons.camera_alt, color: Colors.white, size: 12)
                                           ),
@@ -229,13 +132,13 @@ class _ProfileScreenState extends State<ProfileScreen> {
                                           onPressed: () async {
                                             final newRole = await showDialog<String>(
                                               context: context,
-                                              builder: (context) {
+                                              builder: (dialogCtx) {
                                                 return SimpleDialog(
                                                   title: const Text('Cambiar Rol', style: TextStyle(color: AppTheme.textDark, fontWeight: FontWeight.bold)),
                                                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
                                                   children: ['Miembro', 'Hijo', 'Hija'].map((r) {
                                                     return SimpleDialogOption(
-                                                      onPressed: () => Navigator.pop(context, r.toLowerCase()),
+                                                      onPressed: () => Navigator.pop(dialogCtx, r.toLowerCase()),
                                                       child: Padding(
                                                         padding: const EdgeInsets.symmetric(vertical: 8.0),
                                                         child: Text(r, style: const TextStyle(fontSize: 16)),
@@ -247,8 +150,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                                             );
                                             if (newRole != null && context.mounted) {
                                               try {
-                                                final client = Supabase.instance.client;
-                                                await client.from('profiles').update({'rol': newRole}).eq('id', profile.id);
+                                                await Supabase.instance.client.from('profiles').update({'rol': newRole}).eq('id', profile.id);
                                                 if (!context.mounted) return;
                                                 await context.read<AuthProvider>().refreshProfile();
                                                 if (!context.mounted) return;
@@ -269,14 +171,13 @@ class _ProfileScreenState extends State<ProfileScreen> {
                               Container(width: 1, height: 100, color: Colors.grey.shade200, margin: const EdgeInsets.symmetric(horizontal: 8)),
                               Expanded(
                                 flex: 1,
-                                child: _buildFamilyGrid(family.members.where((m) => m.id != profile.id).toList()),
+                                child: _buildFamilyGrid(context, controller, family.members.where((m) => m.id != profile.id).toList()),
                               ),
                             ]
                           ],
                         ),
                         const SizedBox(height: 16),
                         
-                        // QR Code Section for Family linking
                         if (family.familyCode.isNotEmpty && (profile.rol.toLowerCase() == 'jefe' || profile.rol.toLowerCase() == 'jefa'))
                           Container(
                             padding: const EdgeInsets.all(16),
@@ -290,10 +191,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
                                     const Icon(Icons.qr_code_scanner, color: AppTheme.green600),
                                     const SizedBox(width: 8),
                                     const Text('Código de Familia', style: TextStyle(color: AppTheme.green700, fontWeight: FontWeight.w800, fontSize: 16)),
-                                    if (_showQr && _qrToken != null) ...[
+                                    if (controller.showQr && controller.qrToken != null) ...[
                                       const SizedBox(width: 8),
                                       GestureDetector(
-                                        onTap: () => _loadActiveQrToken(profile.familyId ?? '', forceNew: true),
+                                        onTap: () => controller.loadActiveQrToken(profile.familyId ?? '', forceNew: true),
                                         child: Container(
                                           padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                                           decoration: BoxDecoration(
@@ -314,19 +215,19 @@ class _ProfileScreenState extends State<ProfileScreen> {
                                   ],
                                 ),
                                 const SizedBox(height: 12),
-                                if (!_showQr)
+                                if (!controller.showQr)
                                   ElevatedButton.icon(
-                                    onPressed: () => _generateQr(profile.familyId ?? ''),
+                                    onPressed: () => controller.generateQr(profile.familyId ?? ''),
                                     style: ElevatedButton.styleFrom(backgroundColor: AppTheme.green600, foregroundColor: Colors.white),
                                     icon: const Icon(Icons.visibility),
                                     label: const Text('Generar/Mostrar Código'),
                                   )
-                                else if (_qrToken != null) ...[
+                                else if (controller.qrToken != null) ...[
                                   Container(
                                     padding: const EdgeInsets.all(8),
                                     decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(12)),
                                     child: QrImageView(
-                                      data: jsonEncode({'token': _qrToken, 'family_id': profile.familyId ?? ''}),
+                                      data: jsonEncode({'token': controller.qrToken, 'family_id': profile.familyId ?? ''}),
                                       version: QrVersions.auto,
                                       size: 150.0,
                                       eyeStyle: const QrEyeStyle(eyeShape: QrEyeShape.square, color: AppTheme.green700),
@@ -334,9 +235,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
                                     ),
                                   ),
                                   const SizedBox(height: 8),
-                                  Text(_qrToken!, style: const TextStyle(color: AppTheme.textDark, fontSize: 18, fontWeight: FontWeight.w900, letterSpacing: 2)),
+                                  Text(controller.qrToken!, style: const TextStyle(color: AppTheme.textDark, fontSize: 18, fontWeight: FontWeight.w900, letterSpacing: 2)),
                                   const SizedBox(height: 4),
-                                  Text('Expira en $_fmtQrTime', style: const TextStyle(color: AppTheme.amber400, fontWeight: FontWeight.bold, fontSize: 13)),
+                                  Text('Expira en ${controller.fmtQrTime}', style: const TextStyle(color: AppTheme.amber400, fontWeight: FontWeight.bold, fontSize: 13)),
                                   const SizedBox(height: 2),
                                   const Text('Muestra este QR para añadir miembros a tu familia', textAlign: TextAlign.center, style: TextStyle(color: AppTheme.textLight, fontSize: 12)),
                                 ] else
@@ -345,7 +246,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
                             ),
                           ),
 
-                        // Configuración de Familia
                         if (family.familyCode.isNotEmpty && (profile.rol.toLowerCase() == 'jefe' || profile.rol.toLowerCase() == 'jefa'))
                           Container(
                             padding: const EdgeInsets.all(16),
@@ -363,7 +263,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                                 ),
                                 const SizedBox(height: 12),
                                 ElevatedButton.icon(
-                                  onPressed: () => _editFamilyDialog(family.familyName, profile.familyId ?? ''),
+                                  onPressed: () => _editFamilyDialog(context, controller, family.familyName, profile.familyId ?? ''),
                                   style: ElevatedButton.styleFrom(backgroundColor: AppTheme.blue700, foregroundColor: Colors.white),
                                   icon: const Icon(Icons.edit),
                                   label: const Text('Cambiar Nombre y Foto'),
@@ -550,13 +450,13 @@ class _ProfileScreenState extends State<ProfileScreen> {
             padding: EdgeInsets.symmetric(vertical: 20),
             child: Center(
               child: Text(
-                'No hay logros disponibles.',
-                style: TextStyle(color: AppTheme.textLight),
-              ),
-            ),
-          )
-        else
-          ...list.map((item) => _logro(item)),
+               'No hay logros disponibles.',
+               style: TextStyle(color: AppTheme.textLight),
+             ),
+           ),
+         )
+       else
+         ...list.map((item) => _logro(item)),
       ],
     );
   }
@@ -777,7 +677,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
     );
   }
 
-  Widget _buildFamilyGrid(List<FamilyMember> members) {
+  Widget _buildFamilyGrid(BuildContext context, ProfileController controller, List<FamilyMember> members) {
     if (members.isEmpty) {
       return const Center(child: Text('Solo tú', style: TextStyle(color: Colors.grey, fontSize: 12)));
     }
@@ -788,7 +688,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
       runSpacing: 8,
       alignment: WrapAlignment.center,
       children: displayMembers.map((m) => GestureDetector(
-        onTap: () => _editMemberDialog(m),
+        onTap: () => _editMemberDialog(context, controller, m),
         child: SizedBox(
           width: 44,
           child: Column(
@@ -807,7 +707,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
     );
   }
 
-  Future<void> _editMemberDialog(FamilyMember member) async {
+  Future<void> _editMemberDialog(BuildContext context, ProfileController controller, FamilyMember member) async {
     final nameCtrl = TextEditingController(text: member.nombre);
     String selectedRole = member.rol.toLowerCase();
     if (!['miembro', 'hijo', 'hija', 'co-admin'].contains(selectedRole)) {
@@ -852,24 +752,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
                     child: ElevatedButton(
                       style: ElevatedButton.styleFrom(backgroundColor: AppTheme.green600, foregroundColor: Colors.white),
                       onPressed: () async {
-                        try {
-                          await Supabase.instance.client.from('profiles').update({
-                            'nombre': nameCtrl.text,
-                            'rol': selectedRole,
-                          }).eq('id', member.id);
-                          if (!ctx.mounted) return;
-                          Navigator.pop(ctx);
-                          if (!mounted) return;
-                          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Miembro actualizado')));
-                          
-                          final profile = context.read<AuthProvider>().profile;
-                          if (profile?.familyId != null) {
-                            context.read<FamilyProvider>().loadFamilyMembers(profile!.familyId!);
-                          }
-                        } catch (e) {
-                          if (!mounted) return;
-                          ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e')));
-                        }
+                        await controller.updateMemberRole(context, member.id, nameCtrl.text, selectedRole);
+                        if (ctx.mounted) Navigator.pop(ctx);
                       },
                       child: const Text('Guardar'),
                     ),
@@ -884,7 +768,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
     );
   }
 
-  Future<void> _editFamilyDialog(String currentName, String familyId) async {
+  Future<void> _editFamilyDialog(BuildContext context, ProfileController controller, String currentName, String familyId) async {
     final nameCtrl = TextEditingController(text: currentName);
     bool uploading = false;
 
@@ -912,39 +796,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
                     child: ElevatedButton.icon(
                       style: ElevatedButton.styleFrom(backgroundColor: AppTheme.blue700.withValues(alpha: 0.1), foregroundColor: AppTheme.blue700),
                       onPressed: uploading ? null : () async {
-                        final picker = ImagePicker();
-                        final image = await picker.pickImage(source: ImageSource.gallery, maxWidth: 800);
-                        if (image == null) return;
-                        
-                        setModalState(() => uploading = true);
-                        try {
-                          final file = File(image.path);
-                          final fileExt = image.path.split('.').last;
-                          final fileName = '${DateTime.now().toIso8601String()}.$fileExt';
-                          final filePath = 'families/$familyId/$fileName';
-
-                          await Supabase.instance.client.storage.from('avatars').upload(filePath, file);
-                          final imageUrl = Supabase.instance.client.storage.from('avatars').getPublicUrl(filePath);
-
-                          // Persist URL in database and locally
-                          await Supabase.instance.client.from('families').update({
-                            'avatar_url': imageUrl,
-                          }).eq('id', familyId);
-                          
-                          final prefs = await SharedPreferences.getInstance();
-                          await prefs.setString('family_avatar_url_$familyId', imageUrl);
-
-                          if (!ctx.mounted) return;
-                          if (!mounted) return;
-                          context.read<FamilyProvider>().setLocalFamilyAvatar(imageUrl);
-                          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Foto actualizada')));
-                          context.read<FamilyProvider>().loadFamilyMembers(familyId);
-                        } catch (e) {
-                          if (!mounted) return;
-                          ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error al subir foto: $e')));
-                        } finally {
-                          if (ctx.mounted) setModalState(() => uploading = false);
-                        }
+                        await controller.updateFamilyPhoto(context, familyId, (val) {
+                          if (ctx.mounted) setModalState(() => uploading = val);
+                        });
                       },
                       icon: uploading ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2)) : const Icon(Icons.photo_camera),
                       label: const Text('Subir/Cambiar Foto'),
@@ -956,19 +810,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
                     child: ElevatedButton(
                       style: ElevatedButton.styleFrom(backgroundColor: AppTheme.blue700, foregroundColor: Colors.white),
                       onPressed: () async {
-                        try {
-                          await Supabase.instance.client.from('families').update({
-                            'nombre': nameCtrl.text,
-                          }).eq('id', familyId);
-                          if (!ctx.mounted) return;
-                          Navigator.pop(ctx);
-                          if (!mounted) return;
-                          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Nombre actualizado')));
-                          context.read<FamilyProvider>().loadFamilyMembers(familyId);
-                        } catch (e) {
-                          if (!mounted) return;
-                          ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e')));
-                        }
+                        await controller.updateFamilyName(context, familyId, nameCtrl.text);
+                        if (ctx.mounted) Navigator.pop(ctx);
                       },
                       child: const Text('Guardar Nombre'),
                     ),

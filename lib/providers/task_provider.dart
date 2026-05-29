@@ -44,14 +44,16 @@ class TaskProvider with ChangeNotifier {
   Future<void> _loadLocalRetos(String? userId) async {
     if (userId == null) return;
     try {
-      final todayStr = DateTime.now().toIso8601String().split('T')[0];
+      final now = DateTime.now();
+      final startOfTodayLocal = DateTime(now.year, now.month, now.day);
+      final startOfTodayUtc = startOfTodayLocal.toUtc().toIso8601String();
       
       // Query Supabase for today's challenge completions that are not rejected
       final response = await Supabase.instance.client
           .from('reto_validations')
           .select('reto, estado')
           .eq('user_id', userId)
-          .gte('created_at', '${todayStr}T00:00:00')
+          .gte('created_at', startOfTodayUtc)
           .neq('estado', 'rechazado');
 
       final completedTitles = (response as List).map((e) => e['reto'] as String).toList();

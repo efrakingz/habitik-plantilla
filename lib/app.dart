@@ -2,10 +2,10 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'config/theme.dart';
 import 'providers/auth_provider.dart';
-import 'screens/login_screen.dart';
-import 'screens/dashboard_screen.dart';
-import 'screens/onboarding_screen.dart';
-import 'widgets/loading_screen.dart';
+import 'screens/login/login_screen.dart';
+import 'screens/dashboard/dashboard_screen.dart';
+import 'screens/onboarding/onboarding_screen.dart';
+import 'components/loading_screen.dart';
 
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter/gestures.dart';

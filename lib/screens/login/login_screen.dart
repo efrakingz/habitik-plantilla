@@ -1,45 +1,28 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import '../config/theme.dart';
-import '../providers/auth_provider.dart';
+import '../../config/theme.dart';
+import '../../providers/auth_provider.dart';
+import 'login_controller.dart';
 
-class LoginScreen extends StatefulWidget {
+class LoginScreen extends StatelessWidget {
   const LoginScreen({super.key});
 
   @override
-  State<LoginScreen> createState() => _LoginScreenState();
+  Widget build(BuildContext context) {
+    return ChangeNotifierProvider(
+      create: (_) => LoginController(),
+      child: const _LoginScreenContent(),
+    );
+  }
 }
 
-class _LoginScreenState extends State<LoginScreen> {
-  final _email = TextEditingController();
-  final _pass = TextEditingController();
-  final _nombre = TextEditingController();
-  bool _isSignUp = false;
-  bool _loading = false;
-
-  @override
-  void dispose() {
-    _email.dispose();
-    _pass.dispose();
-    _nombre.dispose();
-    super.dispose();
-  }
-
-  Future<void> _submit() async {
-    final auth = context.read<AuthProvider>();
-    setState(() => _loading = true);
-
-    if (_isSignUp) {
-      await auth.signUp(_email.text.trim(), _pass.text, _nombre.text.trim());
-    } else {
-      await auth.signInWithEmail(_email.text.trim(), _pass.text);
-    }
-    if (!mounted) return;
-    setState(() => _loading = false);
-  }
+class _LoginScreenContent extends StatelessWidget {
+  const _LoginScreenContent();
 
   @override
   Widget build(BuildContext context) {
+    final controller = context.watch<LoginController>();
+
     return Scaffold(
       body: Container(
         decoration: const BoxDecoration(
@@ -98,32 +81,32 @@ class _LoginScreenState extends State<LoginScreen> {
                     },
                   ),
 
-                  if (_isSignUp) _buildField(_nombre, 'Nombre', Icons.person_outline, false),
+                  if (controller.isSignUp) _buildField(context, controller.nombreController, 'Nombre', Icons.person_outline, false),
                   const SizedBox(height: 12),
-                  _buildField(_email, 'Correo electrónico', Icons.email_outlined, false),
+                  _buildField(context, controller.emailController, 'Correo electrónico', Icons.email_outlined, false),
                   const SizedBox(height: 12),
-                  _buildField(_pass, 'Contraseña', Icons.lock_outline, true),
+                  _buildField(context, controller.passController, 'Contraseña', Icons.lock_outline, true),
                   const SizedBox(height: 24),
 
                   SizedBox(
                     width: double.infinity,
                     height: 52,
                     child: ElevatedButton(
-                      onPressed: _loading ? null : _submit,
+                      onPressed: controller.loading ? null : () => controller.submit(context),
                       style: ElevatedButton.styleFrom(
                         backgroundColor: AppTheme.amber400,
                         foregroundColor: AppTheme.textDark,
                         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
                         textStyle: const TextStyle(fontSize: 15, fontWeight: FontWeight.w800),
                       ),
-                      child: _loading
+                      child: controller.loading
                         ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))
-                        : Text(_isSignUp ? 'Crear cuenta' : 'Iniciar sesión'),
+                        : Text(controller.isSignUp ? 'Crear cuenta' : 'Iniciar sesión'),
                     ),
                   ),
                   const SizedBox(height: 16),
 
-                  Row(children: const [
+                  const Row(children: [
                     Expanded(child: Divider(color: AppTheme.green500)),
                     Padding(padding: EdgeInsets.symmetric(horizontal: 12), child: Text('o continuar con', style: TextStyle(color: AppTheme.green200, fontSize: 12))),
                     Expanded(child: Divider(color: AppTheme.green500)),
@@ -134,7 +117,7 @@ class _LoginScreenState extends State<LoginScreen> {
                     width: double.infinity,
                     height: 52,
                     child: OutlinedButton.icon(
-                      onPressed: () => context.read<AuthProvider>().signInWithGoogle(),
+                      onPressed: () => controller.signInWithGoogle(context),
                       icon: _googleIcon(),
                       label: const Text('Google', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700)),
                       style: OutlinedButton.styleFrom(
@@ -147,12 +130,9 @@ class _LoginScreenState extends State<LoginScreen> {
                   const SizedBox(height: 24),
 
                   TextButton(
-                    onPressed: () {
-                      setState(() { _isSignUp = !_isSignUp; });
-                      context.read<AuthProvider>().clearError();
-                    },
+                    onPressed: () => controller.toggleSignUp(context),
                     child: Text(
-                      _isSignUp ? '¿Ya tienes cuenta? Iniciar sesión' : '¿No tienes cuenta? Crear cuenta',
+                      controller.isSignUp ? '¿Ya tienes cuenta? Iniciar sesión' : '¿No tienes cuenta? Crear cuenta',
                       style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600),
                     ),
                   ),
@@ -165,7 +145,7 @@ class _LoginScreenState extends State<LoginScreen> {
     );
   }
 
-  Widget _buildField(TextEditingController ctrl, String label, IconData icon, bool isPassword) {
+  Widget _buildField(BuildContext context, TextEditingController ctrl, String label, IconData icon, bool isPassword) {
     return Container(
       decoration: BoxDecoration(
         color: Colors.white,
